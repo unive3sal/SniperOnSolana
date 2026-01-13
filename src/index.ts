@@ -5,6 +5,7 @@ import { MonitorCoordinator } from './monitor/index.js';
 import { SecurityModule, type AnalysisRequest } from './security/index.js';
 import { ExecutorModule } from './executor/index.js';
 import { PositionManager } from './position/index.js';
+import { WalletSweepManager, type SweepResult } from './sweep/index.js';
 import { getSolBalance } from './utils/wallet.js';
 import type { Logger } from 'pino';
 import type { Position } from './config/types.js';
@@ -20,6 +21,7 @@ class SniperBot {
   private readonly security: SecurityModule;
   private readonly executor: ExecutorModule;
   private readonly positions: PositionManager;
+  private readonly sweep: WalletSweepManager;
   private isRunning = false;
 
   constructor() {
@@ -35,6 +37,7 @@ class SniperBot {
     this.security = new SecurityModule(this.config, this.logger);
     this.executor = new ExecutorModule(this.config, this.logger);
     this.positions = new PositionManager(this.config, this.logger);
+    this.sweep = new WalletSweepManager(this.config, this.logger, this.executor.getConnection());
   }
 
   /**
@@ -77,6 +80,9 @@ class SniperBot {
 
     // Start position monitoring
     this.positions.startMonitoring();
+
+    // Start auto-sweep if enabled
+    this.sweep.start();
 
     this.isRunning = true;
     this.logger.info('Sniper bot is now running. Listening for new pools...');
@@ -125,6 +131,25 @@ class SniperBot {
         pnlPercent: position.pnlPercent.toFixed(2),
         exitReason: position.exitReason,
       }, 'Position closed event');
+    });
+
+    // Handle sweep events
+    this.sweep.on('sweep_success', (result: SweepResult) => {
+      this.logger.info({
+        amount: result.amount?.toFixed(4),
+        txHash: result.txHash,
+      }, 'Auto-sweep completed successfully');
+    });
+
+    this.sweep.on('sweep_failure', (result: SweepResult) => {
+      this.logger.error({
+        amount: result.amount?.toFixed(4),
+        error: result.error,
+      }, 'Auto-sweep failed');
+    });
+
+    this.sweep.on('sweep_error', ({ error }: { error: string }) => {
+      this.logger.error({ error }, 'Auto-sweep error');
     });
   }
 
@@ -311,6 +336,7 @@ class SniperBot {
     // Stop monitoring
     await this.monitor.stop();
     this.positions.stopMonitoring();
+    this.sweep.stop();
 
     // Log final portfolio summary
     const summary = this.positions.getPortfolioSummary();
@@ -332,12 +358,14 @@ class SniperBot {
     monitorStatus: string;
     openPositions: number;
     stats: ReturnType<MonitorCoordinator['getStats']>;
+    sweepStats: ReturnType<WalletSweepManager['getStats']>;
   } {
     return {
       isRunning: this.isRunning,
       monitorStatus: this.monitor.getConnectionStatus(),
       openPositions: this.positions.getOpenPositions().length,
       stats: this.monitor.getStats(),
+      sweepStats: this.sweep.getStats(),
     };
   }
 }

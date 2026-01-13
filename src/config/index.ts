@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { PublicKey } from '@solana/web3.js';
 import { loadEnv, getKeypairFromPrivateKey } from './env.js';
 import { RPC_ENDPOINTS } from './constants.js';
 import type { Config } from './types.js';
@@ -94,6 +95,13 @@ export function loadConfig(): Config {
       dryRun: env.DRY_RUN,
       useDevnet: env.USE_DEVNET,
     },
+
+    autoSweep: {
+      enabled: env.ENABLE_AUTO_SWEEP,
+      coldWalletAddress: env.COLD_WALLET_ADDRESS ? new PublicKey(env.COLD_WALLET_ADDRESS) : null,
+      thresholdSol: env.BUY_AMOUNT_SOL * 2, // Dynamic: 2x buy amount
+      checkIntervalMs: 30000, // 30 seconds
+    },
   };
   
   return configInstance;
@@ -141,6 +149,15 @@ export function validateConfig(config: Config): void {
   if (!config.dex.enableRaydium && !config.dex.enablePumpfun && !config.dex.enableOrca) {
     throw new Error('At least one DEX must be enabled');
   }
+
+  // Validate auto-sweep configuration
+  if (config.autoSweep.enabled && !config.autoSweep.coldWalletAddress) {
+    throw new Error('COLD_WALLET_ADDRESS must be set when ENABLE_AUTO_SWEEP is true');
+  }
+
+  if (config.autoSweep.enabled && config.autoSweep.coldWalletAddress?.equals(config.wallet.publicKey)) {
+    throw new Error('Cold wallet address cannot be the same as trading wallet');
+  }
 }
 
 /**
@@ -166,5 +183,13 @@ export function getConfigSummary(config: Config): Record<string, unknown> {
     dex: config.dex,
     logging: config.logging,
     mode: config.mode,
+    autoSweep: {
+      enabled: config.autoSweep.enabled,
+      coldWalletAddress: config.autoSweep.coldWalletAddress
+        ? `${config.autoSweep.coldWalletAddress.toBase58().slice(0, 4)}...${config.autoSweep.coldWalletAddress.toBase58().slice(-4)}`
+        : null,
+      thresholdSol: config.autoSweep.thresholdSol,
+      checkIntervalMs: config.autoSweep.checkIntervalMs,
+    },
   };
 }

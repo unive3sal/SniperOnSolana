@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Keypair } from '@solana/web3.js';
+import { Keypair, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
 
 /**
@@ -85,6 +85,21 @@ export const envSchema = z.object({
   // Mode
   DRY_RUN: z.string().transform((v) => v === 'true').optional().default('false'),
   USE_DEVNET: z.string().transform((v) => v === 'true').optional().default('false'),
+
+  // Auto-Sweep
+  ENABLE_AUTO_SWEEP: z.string().transform((v) => v === 'true').optional().default('false'),
+  COLD_WALLET_ADDRESS: z.string().optional().refine(
+    (addr) => {
+      if (!addr) return true; // Optional, so empty is valid
+      try {
+        new PublicKey(addr);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    { message: 'Invalid Solana public key address' }
+  ),
 });
 
 /**

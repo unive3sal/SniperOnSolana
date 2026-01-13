@@ -14,6 +14,7 @@ A high-performance Solana token sniper bot built with TypeScript. Features gRPC 
   - Risk scoring (0-100)
 - **MEV Protection**: Jito bundle submission with dynamic tip management
 - **Position Management**: Automated take-profit and stop-loss execution
+- **Auto-Sweep**: Automatic profit protection by transferring excess SOL to cold wallet
 - **Configurable**: Extensive configuration via environment variables
 
 ## Architecture
@@ -22,18 +23,25 @@ A high-performance Solana token sniper bot built with TypeScript. Features gRPC 
 ┌─────────────────────────────────────────────────────────────────┐
 │                         SNIPER BOT                              │
 ├─────────────────────────────────────────────────────────────────┤
-│  Monitor Module          Security Module       Executor Module  │
-│  ┌─────────────────┐    ┌─────────────────┐   ┌──────────────┐ │
-│  │ gRPC (Primary)  │───▶│ Fast Checks     │──▶│ Jito Bundle  │ │
-│  │ WebSocket (Fallback)│ │ Deep Analysis   │   │ RPC Fallback │ │
-│  │                 │    │ Honeypot Sim    │   │              │ │
-│  └─────────────────┘    └─────────────────┘   └──────────────┘ │
+│     Monitor Module        Security Module      Executor Module  │
+│  ┌─────────────────┐    ┌─────────────────┐   ┌──────────────┐  │
+│  │ gRPC (Primary)  │───▶│ Fast Checks     │──▶│ Jito Bundle  │  │
+│  │    WebSocket    │    │                 │   │              │  │
+│  │   (Fallback)    │    │ Deep Analysis   │   │ RPC Fallback │  │
+│  │                 │    │ Honeypot Sim    │   │              │  │
+│  └─────────────────┘    └─────────────────┘   └──────────────┘  │
 │           │                      │                    │         │
 │           └──────────────────────┼────────────────────┘         │
 │                                  ▼                              │
 │                    ┌─────────────────────────┐                  │
 │                    │   Position Manager      │                  │
 │                    │   (TP/SL Automation)    │                  │
+│                    └─────────────────────────┘                  │
+│                                  │                              │
+│                                  ▼                              │
+│                    ┌─────────────────────────┐                  │
+│                    │   Wallet Sweep Manager  │                  │
+│                    │ (Auto-Profit Protection)│                  │
 │                    └─────────────────────────┘                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -108,6 +116,10 @@ ENABLE_PUMPFUN=true
 # Mode
 DRY_RUN=false               # Set true to test without trading
 USE_DEVNET=false            # Set true for devnet testing
+
+# Auto-Sweep (optional)
+ENABLE_AUTO_SWEEP=false     # Enable automatic profit sweeping
+# COLD_WALLET_ADDRESS=...   # Your cold wallet address (when enabled)
 ```
 
 See [.env.example](.env.example) for all available options.
@@ -182,6 +194,9 @@ src/
 ├── position/              # Position management
 │   └── index.ts           # TP/SL automation
 │
+├── sweep/                 # Wallet management
+│   └── index.ts           # Auto-sweep to cold wallet
+│
 ├── utils/                 # Utilities
 │   ├── logger.ts          # Pino structured logging
 │   ├── wallet.ts          # Keypair utilities
@@ -213,6 +228,64 @@ A token must score above `RISK_SCORE_THRESHOLD` (default: 70) to be traded.
 3. **Analysis**: Security module runs all checks and calculates risk score
 4. **Execution**: If passed, buy transaction is submitted via Jito bundle
 5. **Management**: Position is tracked for take-profit or stop-loss
+6. **Auto-Sweep**: Excess SOL automatically transferred to cold wallet for protection
+
+## Auto-Sweep Feature
+
+Protect your accumulated profits by automatically transferring excess SOL to a secure cold wallet.
+
+### How It Works
+
+- **Automatic Monitoring**: Checks wallet balance every 30 seconds
+- **Dynamic Threshold**: Threshold = 2× your `BUY_AMOUNT_SOL` setting
+- **Smart Transfers**: When balance exceeds threshold, transfers the excess while keeping enough for trading
+- **Retry Logic**: Failed transfers automatically retry 3 times with exponential backoff
+- **Safety Features**: Minimum 0.01 SOL transfer, address validation, dry-run support
+
+### Configuration
+
+```env
+# Enable auto-sweep
+ENABLE_AUTO_SWEEP=true
+
+# Your cold wallet public key (Solana address)
+COLD_WALLET_ADDRESS=YourColdWalletPublicKeyHere
+
+# Buy amount determines threshold (2× this value)
+BUY_AMOUNT_SOL=0.1  # Threshold will be 0.2 SOL
+```
+
+### Example Behavior
+
+With `BUY_AMOUNT_SOL=0.1` (threshold = 0.2 SOL):
+
+| Balance | Action |
+|---------|--------|
+| 0.15 SOL | No sweep (below threshold) |
+| 0.25 SOL | Sweep 0.05 SOL to cold wallet |
+| 1.00 SOL | Sweep 0.80 SOL to cold wallet |
+
+The bot always keeps the threshold amount (0.2 SOL) for continued trading operations.
+
+### Testing
+
+**Always test on devnet first:**
+
+```bash
+USE_DEVNET=true
+ENABLE_AUTO_SWEEP=true
+COLD_WALLET_ADDRESS=<devnet-address>
+npm run dev
+```
+
+See [AUTO_SWEEP_GUIDE.md](AUTO_SWEEP_GUIDE.md) for detailed testing procedures and troubleshooting.
+
+### Security
+
+- Cold wallet address must be different from trading wallet
+- Only the public key is needed (never share private keys)
+- Transactions are confirmed before marking success
+- Graceful failure - bot continues trading even if sweep fails
 
 ## Supported DEXes
 

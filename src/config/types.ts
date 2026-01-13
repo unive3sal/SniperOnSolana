@@ -81,6 +81,16 @@ export interface ModeConfig {
 }
 
 /**
+ * Auto-sweep configuration
+ */
+export interface AutoSweepConfig {
+  enabled: boolean;
+  coldWalletAddress: PublicKey | null;
+  thresholdSol: number;
+  checkIntervalMs: number;
+}
+
+/**
  * Complete application configuration
  */
 export interface Config {
@@ -92,6 +102,7 @@ export interface Config {
   dex: DexConfig;
   logging: LoggingConfig;
   mode: ModeConfig;
+  autoSweep: AutoSweepConfig;
 }
 
 /**
