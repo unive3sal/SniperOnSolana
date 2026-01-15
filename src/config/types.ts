@@ -195,3 +195,27 @@ export interface BundleResult {
   error?: string;
   landed: boolean;
 }
+
+/**
+ * Token-2022 extension information
+ */
+export interface Token2022ExtensionInfo {
+  /** Whether this is a Token-2022 token (vs standard SPL Token) */
+  isToken2022: boolean;
+  /** List of extension names present on the mint */
+  extensions: string[];
+  /** Transfer fee percentage (if TransferFeeConfig extension present) */
+  transferFeePercent?: number;
+  /** TransferHook program address (if TransferHook extension present) */
+  transferHookProgram?: string;
+  /** Whether MintCloseAuthority extension is present (CRITICAL - can make tokens worthless) */
+  hasMintCloseAuthority: boolean;
+  /** Whether PermanentDelegate extension is present (CRITICAL - can steal tokens) */
+  hasPermanentDelegate: boolean;
+  /** Whether TransferHook extension is present (CRITICAL - can block transfers) */
+  hasTransferHook: boolean;
+  /** Whether NonTransferable extension is present (CRITICAL - cannot sell) */
+  isNonTransferable: boolean;
+  /** Whether DefaultAccountState is set to frozen */
+  defaultAccountStateFrozen: boolean;
+}

@@ -146,6 +146,22 @@ export const RISK_WEIGHTS = {
   HONEYPOT_PASSED: 15,
   CONTRACT_VERIFIED: 10,
   KNOWN_DEVELOPER: 5,
+  
+  // Token-2022 extension weights
+  TOKEN_STANDARD_SPL: 10, // Slight bonus for regular SPL tokens (simpler, no extension risks)
+  TOKEN2022_NO_DANGEROUS_EXTENSIONS: 15, // Bonus for Token-2022 with safe extensions only
+  
+  // Critical extensions (instant fail - negative scores)
+  TOKEN2022_MINT_CLOSE_AUTHORITY: -100, // Can close mint, making tokens worthless
+  TOKEN2022_PERMANENT_DELEGATE: -100, // Can transfer/burn any holder's tokens
+  TOKEN2022_TRANSFER_HOOK: -100, // Custom program can block transfers (honeypot)
+  TOKEN2022_NON_TRANSFERABLE: -100, // Soulbound tokens, cannot sell
+  
+  // Warning extensions (penalties)
+  TOKEN2022_HIGH_TRANSFER_FEE: -50, // Transfer fee > 1%
+  TOKEN2022_MODERATE_TRANSFER_FEE: -15, // Transfer fee 0.1% - 1%
+  TOKEN2022_DEFAULT_FROZEN: -30, // New accounts frozen by default
+  TOKEN2022_CONFIDENTIAL_TRANSFER: -5, // Harder to analyze (warning only)
 } as const;
 
 /**

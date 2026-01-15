@@ -1,13 +1,14 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { LRUCache } from 'lru-cache';
 import type { Logger } from 'pino';
-import type { Config, RiskAnalysis, RiskFactor, DexType } from '../config/types.js';
+import type { Config, RiskAnalysis, RiskFactor, DexType, Token2022ExtensionInfo } from '../config/types.js';
 import { TIMING } from '../config/constants.js';
 import { checkAuthorities } from './checks/authority.js';
 import { checkPoolLiquidity, checkLpLock, checkLpBurn } from './checks/liquidity.js';
 import { analyzeHolders, checkDevWallet } from './checks/holders.js';
 import { checkHoneypot } from './checks/honeypot.js';
 import { BlacklistManager, WhitelistManager } from './checks/blacklist.js';
+import { checkToken2022Extensions, hasCriticalExtensions } from './checks/token2022.js';
 import {
   calculateRiskScore,
   getRiskLevel,
@@ -18,6 +19,7 @@ import {
 // Re-export
 export * from './scorer.js';
 export * from './checks/blacklist.js';
+export * from './checks/token2022.js';
 
 /**
  * Token analysis request
@@ -191,21 +193,24 @@ export class SecurityModule {
    * Run fast security checks
    */
   private async runFastChecks(request: AnalysisRequest): Promise<RiskFactor[]> {
-    const { mintAuthority, freezeAuthority } = await checkAuthorities(
-      this.connection,
-      request.mint,
-      this.logger
-    );
+    // Run authority checks, liquidity check, and Token-2022 extension checks in parallel
+    const [
+      { mintAuthority, freezeAuthority },
+      liquidity,
+      { factors: token2022Factors },
+    ] = await Promise.all([
+      checkAuthorities(this.connection, request.mint, this.logger),
+      checkPoolLiquidity(
+        this.connection,
+        request.quoteVault,
+        request.quoteMint,
+        this.config.security.minLiquiditySol,
+        this.logger
+      ),
+      checkToken2022Extensions(this.connection, request.mint, this.logger),
+    ]);
 
-    const liquidity = await checkPoolLiquidity(
-      this.connection,
-      request.quoteVault,
-      request.quoteMint,
-      this.config.security.minLiquiditySol,
-      this.logger
-    );
-
-    return [mintAuthority, freezeAuthority, liquidity];
+    return [mintAuthority, freezeAuthority, liquidity, ...token2022Factors];
   }
 
   /**
@@ -287,14 +292,25 @@ export class SecurityModule {
       return { viable: true };
     }
 
-    // Just check liquidity
-    const liquidity = await checkPoolLiquidity(
-      this.connection,
-      request.quoteVault,
-      request.quoteMint,
-      this.config.security.minLiquiditySol,
-      this.logger
-    );
+    // Check liquidity and Token-2022 critical extensions in parallel
+    const [liquidity, criticalExtensions] = await Promise.all([
+      checkPoolLiquidity(
+        this.connection,
+        request.quoteVault,
+        request.quoteMint,
+        this.config.security.minLiquiditySol,
+        this.logger
+      ),
+      hasCriticalExtensions(this.connection, request.mint, this.logger),
+    ]);
+
+    // Check for critical Token-2022 extensions first (instant fail)
+    if (criticalExtensions.hasCritical) {
+      return { 
+        viable: false, 
+        reason: `Critical Token-2022 extensions: ${criticalExtensions.reasons.join(', ')}`,
+      };
+    }
 
     if (!liquidity.passed) {
       return { viable: false, reason: liquidity.details };

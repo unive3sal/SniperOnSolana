@@ -11,6 +11,7 @@ A high-performance Solana token sniper bot built with TypeScript. Features gRPC 
   - Liquidity and LP lock checks
   - Top holder concentration analysis
   - Honeypot simulation
+  - **Token-2022 extension detection** (MintCloseAuthority, PermanentDelegate, TransferHook, etc.)
   - Risk scoring (0-100)
 - **MEV Protection**: Jito bundle submission with dynamic tip management
 - **Position Management**: Automated take-profit and stop-loss execution
@@ -181,7 +182,8 @@ src/
 │       ├── liquidity.ts   # LP lock verification
 │       ├── holders.ts     # Holder distribution
 │       ├── honeypot.ts    # Sell simulation
-│       └── blacklist.ts   # Known scam cache
+│       ├── blacklist.ts   # Known scam cache
+│       └── token2022.ts   # Token-2022 extension detection
 │
 ├── executor/              # Transaction execution
 │   ├── index.ts           # Executor module
@@ -218,8 +220,28 @@ The bot runs multiple security checks before executing any trade:
 | LP Lock | Verifies LP tokens are locked | +25-30 score |
 | Holder Distribution | Analyzes top holder concentration | +/-15 score |
 | Honeypot Simulation | Simulates a sell transaction | +15 score |
+| Token-2022 Extensions | Detects dangerous Token-2022 extensions | See below |
 
 A token must score above `RISK_SCORE_THRESHOLD` (default: 70) to be traded.
+
+### Token-2022 Extension Protection
+
+Token-2022 (SPL Token 2022) introduces extensions that can be exploited for rug-pulls. The bot automatically detects and rejects tokens with dangerous extensions:
+
+| Extension | Risk Level | Description | Action |
+|-----------|------------|-------------|--------|
+| MintCloseAuthority | **Critical** | Authority can close mint, making all tokens worthless | Instant reject |
+| PermanentDelegate | **Critical** | Authority can transfer/burn ANY holder's tokens | Instant reject |
+| TransferHook | **Critical** | Custom program executes on transfers - can block sells | Instant reject |
+| NonTransferable | **Critical** | Soulbound tokens that cannot be transferred or sold | Instant reject |
+| TransferFee >1% | High | Hidden tax on every transfer | -50 score |
+| TransferFee 0.1-1% | Medium | Moderate transfer tax | -15 score |
+| DefaultAccountState | Medium | New token accounts frozen by default | -30 score |
+| ConfidentialTransfer | Low | Hides transfer amounts, harder to analyze | -5 score |
+
+**Safe tokens receive bonuses:**
+- Standard SPL Token (no extensions): +10 score
+- Token-2022 with only safe extensions: +15 score
 
 ## How It Works
 
