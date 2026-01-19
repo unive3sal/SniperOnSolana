@@ -60,8 +60,8 @@ A high-performance Solana token sniper bot built with TypeScript. Features gRPC 
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/solana-sniper.git
-   cd solana-sniper
+   git clone https://github.com/unive3sal/SniperOnSolana.git
+   cd SniperOnSolana
    ```
 
 2. **Install dependencies**
@@ -300,8 +300,6 @@ COLD_WALLET_ADDRESS=<devnet-address>
 npm run dev
 ```
 
-See [AUTO_SWEEP_GUIDE.md](AUTO_SWEEP_GUIDE.md) for detailed testing procedures and troubleshooting.
-
 ### Security
 
 - Cold wallet address must be different from trading wallet
@@ -369,7 +367,7 @@ LOG_LEVEL=info  # debug, info, warn, error
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+GPL-3.0 license
 
 ## Acknowledgments
 
