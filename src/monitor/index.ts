@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import type { Logger } from 'pino';
 import type { Config, DexType } from '../config/types.js';
 import { PROGRAM_IDS } from '../config/constants.js';
+import { getSharedRateLimiter } from '../utils/rpc.js';
 import { GrpcClient, uint8ArrayToPublicKey } from './grpc/client.js';
 import { WebSocketClient } from './websocket/client.js';
 import { RaydiumParser } from './parsers/raydium.js';
@@ -379,6 +380,10 @@ export class MonitorCoordinator extends EventEmitter {
     if (!connection) return;
 
     try {
+      // Rate limit transaction fetches
+      const rateLimiter = getSharedRateLimiter();
+      await rateLimiter.acquire();
+
       const tx = await connection.getParsedTransaction(signature, {
         commitment: 'confirmed',
         maxSupportedTransactionVersion: 0,

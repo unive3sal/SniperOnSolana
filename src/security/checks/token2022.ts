@@ -11,6 +11,7 @@ import {
 import type { Logger } from 'pino';
 import type { RiskFactor, Token2022ExtensionInfo } from '../../config/types.js';
 import { RISK_WEIGHTS } from '../../config/constants.js';
+import { getSharedRateLimiter } from '../../utils/rpc.js';
 
 /**
  * Critical extensions that should cause instant rejection
@@ -58,6 +59,9 @@ export async function isToken2022Mint(
   mint: PublicKey
 ): Promise<boolean> {
   try {
+    const rateLimiter = getSharedRateLimiter();
+    await rateLimiter.acquire();
+
     const accountInfo = await connection.getAccountInfo(mint, 'confirmed');
     if (!accountInfo) return false;
     return accountInfo.owner.equals(TOKEN_2022_PROGRAM_ID);
@@ -74,12 +78,16 @@ export async function getMintWithProgram(
   connection: Connection,
   mint: PublicKey
 ): Promise<{ mintInfo: Mint; programId: PublicKey } | null> {
+  const rateLimiter = getSharedRateLimiter();
+  await rateLimiter.acquire();
+
   // First check account owner to determine program
   const accountInfo = await connection.getAccountInfo(mint, 'confirmed');
   if (!accountInfo) return null;
 
   const programId = accountInfo.owner;
-  
+
+  await rateLimiter.acquire();
   if (programId.equals(TOKEN_PROGRAM_ID)) {
     const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_PROGRAM_ID);
     return { mintInfo, programId };

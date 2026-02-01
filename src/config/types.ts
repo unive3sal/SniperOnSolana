@@ -10,6 +10,10 @@ export interface NetworkConfig {
   heliusRpcUrl: string;
   heliusWsUrl: string;
   backupRpcUrls: string[];
+  /** RPC rate limit in requests per second (default: 8 for Helius free plan) */
+  rpcRateLimitRps: number;
+  /** RPC cache TTL in milliseconds (default: 2000) */
+  rpcCacheTtlMs: number;
 }
 
 /**

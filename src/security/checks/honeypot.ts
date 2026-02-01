@@ -14,6 +14,7 @@ import {
 import type { Logger } from 'pino';
 import type { RiskFactor, DexType } from '../../config/types.js';
 import { RISK_WEIGHTS, PROGRAM_IDS, TOKEN_MINTS, PUMPFUN_CONSTANTS } from '../../config/constants.js';
+import { getSharedRateLimiter } from '../../utils/rpc.js';
 
 /**
  * Honeypot detection result
@@ -80,6 +81,10 @@ export async function simulateSell(
       return result;
     }
 
+    // Rate limit RPC calls
+    const rateLimiter = getSharedRateLimiter();
+    await rateLimiter.acquire();
+
     // Create transaction
     const { blockhash } = await connection.getLatestBlockhash('confirmed');
     const tx = new Transaction();
@@ -87,6 +92,7 @@ export async function simulateSell(
     tx.feePayer = owner;
     tx.add(sellIx);
 
+    await rateLimiter.acquire();
     // Simulate transaction
     const simulation = await connection.simulateTransaction(tx, []);
 

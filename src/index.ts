@@ -7,6 +7,7 @@ import { ExecutorModule } from './executor/index.js';
 import { PositionManager } from './position/index.js';
 import { WalletSweepManager, type SweepResult } from './sweep/index.js';
 import { getSolBalance } from './utils/wallet.js';
+import { setRateLimitRps, setCacheTtlMs } from './utils/rpc.js';
 import type { Logger } from 'pino';
 import type { Position } from './config/types.js';
 import type { NewPoolEvent } from './monitor/types.js';
@@ -31,7 +32,15 @@ class SniperBot {
 
     // Create logger
     this.logger = createLogger(this.config.logging);
-    
+
+    // Initialize global rate limiter and cache with configured values
+    setRateLimitRps(this.config.network.rpcRateLimitRps);
+    setCacheTtlMs(this.config.network.rpcCacheTtlMs);
+    this.logger.info({
+      rps: this.config.network.rpcRateLimitRps,
+      cacheTtlMs: this.config.network.rpcCacheTtlMs,
+    }, 'RPC rate limiter and cache initialized');
+
     // Initialize modules
     this.monitor = new MonitorCoordinator(this.config, this.logger);
     this.security = new SecurityModule(this.config, this.logger);

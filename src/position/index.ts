@@ -6,7 +6,8 @@ import type { Config, Position, DexType, SwapResult } from '../config/types.js';
 import { TIMING } from '../config/constants.js';
 import { generateId } from '../utils/helpers.js';
 import { getAta, getTokenBalance } from '../utils/wallet.js';
-import { getPumpfunPrice } from '../executor/builder/pumpfun.js';
+import { parsePumpfunBondingCurveState } from '../monitor/parsers/pumpfun.js';
+import { getCachedMultipleAccountsInfo } from '../utils/rpc.js';
 
 /**
  * Position manager for tracking open trades
@@ -193,15 +194,60 @@ export class PositionManager extends EventEmitter {
 
   /**
    * Check all positions for TP/SL triggers
+   * Uses batch fetching to reduce RPC calls
    */
   private async checkPositions(): Promise<void> {
     const openPositions = this.getOpenPositions();
-    
+
     if (openPositions.length === 0) {
       return;
     }
 
-    for (const position of openPositions) {
+    // Separate positions by DEX type for batch processing
+    const pumpfunPositions = openPositions.filter(p => p.dex === 'pumpfun');
+
+    // Batch fetch all pumpfun bonding curves at once
+    if (pumpfunPositions.length > 0) {
+      try {
+        const bondingCurves = pumpfunPositions.map(p => p.pool);
+        const accounts = await getCachedMultipleAccountsInfo(this.connection, bondingCurves);
+
+        for (let i = 0; i < pumpfunPositions.length; i++) {
+          const position = pumpfunPositions[i];
+          const account = accounts[i];
+
+          if (!position || !account) continue;
+
+          try {
+            const state = parsePumpfunBondingCurveState(account.data);
+            if (state) {
+              const price = Number(state.virtualSolReserves) / Number(state.virtualTokenReserves) * 1e3;
+              position.currentPrice = price;
+              position.pnlPercent = ((price - position.entryPrice) / position.entryPrice) * 100;
+
+              this.emit('price_update', {
+                positionId: position.id,
+                currentPrice: price,
+                pnlPercent: position.pnlPercent,
+              });
+
+              this.checkExitConditions(position);
+            }
+          } catch (error) {
+            this.logger.debug(
+              { error, positionId: position.id },
+              'Failed to parse bonding curve for position'
+            );
+          }
+        }
+      } catch (error) {
+        this.logger.warn({ error }, 'Error batch fetching pumpfun prices');
+      }
+    }
+
+    // Handle other DEX positions individually (TODO: batch these too)
+    const otherPositions = openPositions.filter(p => p.dex !== 'pumpfun');
+    for (const position of otherPositions) {
       try {
         await this.updatePositionPrice(position);
         this.checkExitConditions(position);
@@ -215,34 +261,20 @@ export class PositionManager extends EventEmitter {
   }
 
   /**
-   * Update position's current price
+   * Update position's current price (for non-pumpfun positions)
    */
   private async updatePositionPrice(position: Position): Promise<void> {
-    let currentPrice: number;
-
-    try {
-      if (position.dex === 'pumpfun') {
-        currentPrice = await getPumpfunPrice(this.connection, position.pool);
-      } else {
-        // TODO: Implement price fetching for other DEXes
-        return;
-      }
-
-      position.currentPrice = currentPrice;
-      position.pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
-
-      this.emit('price_update', {
-        positionId: position.id,
-        currentPrice,
-        pnlPercent: position.pnlPercent,
-      });
-    } catch (error) {
-      // Price fetch can fail, don't throw
-      this.logger.debug(
-        { error, positionId: position.id },
-        'Failed to fetch price for position'
-      );
+    // Pumpfun positions are handled by batch fetch in checkPositions()
+    if (position.dex === 'pumpfun') {
+      return;
     }
+
+    // TODO: Implement price fetching for other DEXes (Raydium, Orca)
+    // For now, skip non-pumpfun positions
+    this.logger.debug(
+      { positionId: position.id, dex: position.dex },
+      'Price fetching not implemented for this DEX'
+    );
   }
 
   /**

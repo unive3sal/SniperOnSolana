@@ -2,6 +2,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import type { Logger } from 'pino';
 import type { RiskFactor } from '../../config/types.js';
 import { RISK_WEIGHTS } from '../../config/constants.js';
+import { getSharedRateLimiter, getCachedMultipleAccountsInfo } from '../../utils/rpc.js';
 
 /**
  * Holder analysis result
@@ -42,14 +43,19 @@ export async function analyzeHolders(
   };
 
   try {
+    // Rate limit RPC calls
+    const rateLimiter = getSharedRateLimiter();
+    await rateLimiter.acquire();
+
     // Get largest token accounts
     const largestAccounts = await connection.getTokenLargestAccounts(mint, 'confirmed');
-    
+
     if (largestAccounts.value.length === 0) {
       factor.details = 'No token holders found';
       return { factor, analysis };
     }
 
+    await rateLimiter.acquire();
     // Get total supply
     const supplyInfo = await connection.getTokenSupply(mint, 'confirmed');
     const totalSupply = BigInt(supplyInfo.value.amount);
@@ -140,8 +146,14 @@ export async function checkDevWallet(
   }
 
   try {
+    // Rate limit RPC calls
+    const rateLimiter = getSharedRateLimiter();
+    await rateLimiter.acquire();
+
     // Get largest accounts
     const largestAccounts = await connection.getTokenLargestAccounts(mint, 'confirmed');
+
+    await rateLimiter.acquire();
     const supplyInfo = await connection.getTokenSupply(mint, 'confirmed');
     const totalSupply = BigInt(supplyInfo.value.amount);
 
@@ -149,16 +161,25 @@ export async function checkDevWallet(
       return factor;
     }
 
+    // Batch fetch all account infos at once with caching
+    const accountAddresses = largestAccounts.value.map(a => a.address);
+    const accountInfos = await getCachedMultipleAccountsInfo(connection, accountAddresses);
+
     // Check if creator holds significant amount
-    for (const account of largestAccounts.value) {
-      const accountInfo = await connection.getParsedAccountInfo(account.address, 'confirmed');
-      const data = accountInfo.value?.data;
-      
-      if (data && 'parsed' in data) {
-        const owner = data.parsed?.info?.owner;
-        if (owner && owner === creator.toBase58()) {
+    for (let i = 0; i < accountInfos.length; i++) {
+      const accountInfo = accountInfos[i];
+      const account = largestAccounts.value[i];
+      if (!accountInfo || !account) continue;
+
+      // Parse the token account data to find owner
+      // Token account layout: mint (32) + owner (32) + amount (8) + ...
+      if (accountInfo.data.length >= 72) {
+        const ownerBytes = accountInfo.data.slice(32, 64);
+        const ownerPubkey = new PublicKey(ownerBytes);
+
+        if (ownerPubkey.equals(creator)) {
           const devPercent = Number((BigInt(account.amount) * 10000n) / totalSupply) / 100;
-          
+
           if (devPercent > 10) {
             factor.passed = false;
             factor.score = -10;

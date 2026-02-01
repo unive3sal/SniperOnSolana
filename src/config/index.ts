@@ -47,6 +47,8 @@ export function loadConfig(): Config {
       heliusRpcUrl,
       heliusWsUrl,
       backupRpcUrls,
+      rpcRateLimitRps: env.RPC_RATE_LIMIT_RPS,
+      rpcCacheTtlMs: env.RPC_CACHE_TTL_MS,
     },
     
     wallet: {
@@ -169,6 +171,8 @@ export function getConfigSummary(config: Config): Record<string, unknown> {
       grpcEndpoint: config.network.grpcEndpoint,
       heliusRpcUrl: config.network.heliusRpcUrl.replace(/api-key=[^&]+/, 'api-key=***'),
       backupRpcCount: config.network.backupRpcUrls.length,
+      rpcRateLimitRps: config.network.rpcRateLimitRps,
+      rpcCacheTtlMs: config.network.rpcCacheTtlMs,
     },
     wallet: {
       publicKey: config.wallet.publicKey.toBase58(),

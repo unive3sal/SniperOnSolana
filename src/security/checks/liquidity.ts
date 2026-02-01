@@ -2,6 +2,7 @@ import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import type { Logger } from 'pino';
 import type { RiskFactor } from '../../config/types.js';
 import { RISK_WEIGHTS, TOKEN_MINTS } from '../../config/constants.js';
+import { getSharedRateLimiter, getCachedMultipleAccountsInfo } from '../../utils/rpc.js';
 
 /**
  * Check pool liquidity level
@@ -23,6 +24,10 @@ export async function checkPoolLiquidity(
 
   try {
     let liquiditySol = 0;
+
+    // Rate limit RPC calls
+    const rateLimiter = getSharedRateLimiter();
+    await rateLimiter.acquire();
 
     // Check if quote is SOL (wrapped)
     if (quoteMint.equals(TOKEN_MINTS.SOL)) {
@@ -98,9 +103,13 @@ export async function checkLpLock(
   ];
 
   try {
+    // Rate limit RPC calls
+    const rateLimiter = getSharedRateLimiter();
+    await rateLimiter.acquire();
+
     // Get largest LP token holders
     const largestAccounts = await connection.getTokenLargestAccounts(lpMint, 'confirmed');
-    
+
     if (largestAccounts.value.length === 0) {
       factor.details = 'No LP token holders found';
       return factor;
@@ -110,23 +119,27 @@ export async function checkLpLock(
     let totalLocked = 0n;
     let totalSupply = 0n;
 
+    // Calculate total supply from largest accounts
     for (const account of largestAccounts.value) {
       totalSupply += BigInt(account.amount);
-      
-      // Check if account owner is a known locker
-      try {
-        const accountInfo = await connection.getAccountInfo(account.address, 'confirmed');
-        if (accountInfo && LP_LOCKERS.some(locker => {
-          try {
-            return accountInfo.owner.equals(locker);
-          } catch {
-            return false;
-          }
-        })) {
-          totalLocked += BigInt(account.amount);
+    }
+
+    // Batch fetch all account infos at once with caching
+    const accountAddresses = largestAccounts.value.map(a => a.address);
+    const accountInfos = await getCachedMultipleAccountsInfo(connection, accountAddresses);
+
+    // Check which accounts are owned by known lockers
+    for (let i = 0; i < accountInfos.length; i++) {
+      const accountInfo = accountInfos[i];
+      const account = largestAccounts.value[i];
+      if (accountInfo && account && LP_LOCKERS.some(locker => {
+        try {
+          return accountInfo.owner.equals(locker);
+        } catch {
+          return false;
         }
-      } catch {
-        // Skip if can't fetch
+      })) {
+        totalLocked += BigInt(account.amount);
       }
     }
 
@@ -177,10 +190,15 @@ export async function checkLpBurn(
   };
 
   try {
+    // Rate limit RPC calls
+    const rateLimiter = getSharedRateLimiter();
+    await rateLimiter.acquire();
+
     // Get LP mint info to check supply vs largest accounts
     const mintInfo = await connection.getTokenSupply(lpMint, 'confirmed');
     const totalSupply = BigInt(mintInfo.value.amount);
 
+    await rateLimiter.acquire();
     // Get largest accounts
     const largestAccounts = await connection.getTokenLargestAccounts(lpMint, 'confirmed');
     

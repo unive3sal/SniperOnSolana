@@ -15,6 +15,7 @@ import {
 import type { Logger } from 'pino';
 import { PROGRAM_IDS, PUMPFUN_CONSTANTS, PUMPFUN_DISCRIMINATORS } from '../../config/constants.js';
 import { parsePumpfunBondingCurveState, calculatePumpfunBuyOutput, calculatePumpfunSellOutput } from '../../monitor/parsers/pumpfun.js';
+import { getSharedRateLimiter } from '../../utils/rpc.js';
 
 /**
  * Pump.fun swap parameters
@@ -43,9 +44,24 @@ export async function buildPumpfunBuyInstruction(
   }
 
   const solAmountLamports = BigInt(Math.floor(params.solAmount * LAMPORTS_PER_SOL));
-  
-  // Get bonding curve state
-  const bondingCurveAccount = await connection.getAccountInfo(params.bondingCurve, 'confirmed');
+
+  // Get associated token addresses first (no RPC needed)
+  const userAta = await getAssociatedTokenAddress(params.mint, params.owner);
+  const bondingCurveAta = await getAssociatedTokenAddress(
+    params.mint,
+    params.bondingCurve,
+    true // allowOwnerOffCurve
+  );
+
+  // Batch fetch bonding curve and user ATA in one RPC call
+  const rateLimiter = getSharedRateLimiter();
+  await rateLimiter.acquire();
+
+  const [bondingCurveAccount, userAtaAccount] = await connection.getMultipleAccountsInfo(
+    [params.bondingCurve, userAta],
+    'confirmed'
+  );
+
   if (!bondingCurveAccount) {
     throw new Error('Bonding curve account not found');
   }
@@ -69,17 +85,6 @@ export async function buildPumpfunBuyInstruction(
     minTokens: minTokens.toString(),
     slippageBps: params.slippageBps,
   }, 'Calculated Pump.fun buy output');
-
-  // Get associated token addresses
-  const userAta = await getAssociatedTokenAddress(params.mint, params.owner);
-  const bondingCurveAta = await getAssociatedTokenAddress(
-    params.mint,
-    params.bondingCurve,
-    true // allowOwnerOffCurve
-  );
-
-  // Check if user ATA exists, if not create it
-  const userAtaAccount = await connection.getAccountInfo(userAta, 'confirmed');
   if (!userAtaAccount) {
     instructions.push(
       createAssociatedTokenAccountInstruction(
@@ -136,7 +141,10 @@ export async function buildPumpfunSellInstruction(
     throw new Error('tokenAmount required for sell');
   }
 
-  // Get bonding curve state
+  // Get bonding curve state with rate limiting
+  const rateLimiter = getSharedRateLimiter();
+  await rateLimiter.acquire();
+
   const bondingCurveAccount = await connection.getAccountInfo(params.bondingCurve, 'confirmed');
   if (!bondingCurveAccount) {
     throw new Error('Bonding curve account not found');
@@ -208,6 +216,9 @@ export async function getPumpfunPrice(
   connection: Connection,
   bondingCurve: PublicKey
 ): Promise<number> {
+  const rateLimiter = getSharedRateLimiter();
+  await rateLimiter.acquire();
+
   const account = await connection.getAccountInfo(bondingCurve, 'confirmed');
   if (!account) {
     throw new Error('Bonding curve not found');
@@ -230,6 +241,9 @@ export async function isBondingCurveComplete(
   connection: Connection,
   bondingCurve: PublicKey
 ): Promise<boolean> {
+  const rateLimiter = getSharedRateLimiter();
+  await rateLimiter.acquire();
+
   const account = await connection.getAccountInfo(bondingCurve, 'confirmed');
   if (!account) return true; // Assume complete if not found
 

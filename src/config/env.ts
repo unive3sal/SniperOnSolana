@@ -11,6 +11,14 @@ export const envSchema = z.object({
   GRPC_TOKEN: z.string().min(1, 'gRPC token is required'),
   HELIUS_API_KEY: z.string().min(1, 'Helius API key is required'),
   BACKUP_RPC_URLS: z.string().optional().default(''),
+  // RPC rate limit: Free=10, Developer=50, Business=100+
+  RPC_RATE_LIMIT_RPS: z.string().transform(Number).pipe(
+    z.number().int().positive().max(1000)
+  ).optional().default('8'),
+  // RPC cache TTL in milliseconds (higher = fewer requests, but staler data)
+  RPC_CACHE_TTL_MS: z.string().transform(Number).pipe(
+    z.number().int().nonnegative().max(60000)
+  ).optional().default('2000'),
   
   // Wallet
   PRIVATE_KEY: z.string().min(1, 'Private key is required').refine(
