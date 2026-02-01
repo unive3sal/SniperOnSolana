@@ -1,0 +1,42 @@
+# Dependencies
+node_modules
+
+# Build output (rebuilt in Docker)
+dist
+
+# Environment files (mount at runtime)
+.env
+.env.*
+!.env.example
+
+# Logs (mount as volume)
+logs
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+coverage
+*.test.ts
+*.spec.ts
+
+# Documentation
+README.md
+LICENSE
+
+# Wallet files (security)
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
