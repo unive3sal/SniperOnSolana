@@ -47,15 +47,21 @@ export class MonitorCoordinator extends EventEmitter {
     super();
     this.config = config;
     this.logger = logger.child({ module: 'monitor' });
-    
+
     // Initialize clients
     this.grpcClient = new GrpcClient(config.network, this.logger);
     this.wsClient = new WebSocketClient(config.network, this.logger);
-    
+
     // Initialize parsers
     this.raydiumParser = new RaydiumParser(this.logger);
     this.pumpfunParser = new PumpfunParser(this.logger);
-    
+
+    // Devnet: use WebSocket only (gRPC providers typically don't support devnet)
+    if (config.mode.useDevnet) {
+      this.useGrpc = false;
+      this.logger.info('Devnet mode: using WebSocket instead of gRPC');
+    }
+
     // Setup event handlers
     this.setupEventHandlers();
   }
@@ -429,6 +435,12 @@ export class MonitorCoordinator extends EventEmitter {
     this.stats.connectionStatus = 'connecting';
 
     this.logger.info('Starting monitor coordinator');
+
+    // Use WebSocket directly if gRPC is disabled (e.g., devnet mode)
+    if (!this.useGrpc) {
+      await this.startWebSocket();
+      return;
+    }
 
     // Try gRPC first, fallback to WebSocket
     try {

@@ -38,7 +38,7 @@ export function loadConfig(): Config {
   const backupRpcUrls = env.BACKUP_RPC_URLS
     ? env.BACKUP_RPC_URLS.split(',').map((url) => url.trim()).filter(Boolean)
     : [];
-  
+
   configInstance = {
     network: {
       grpcEndpoint: env.GRPC_ENDPOINT,
