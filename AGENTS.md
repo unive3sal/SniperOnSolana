@@ -235,6 +235,19 @@ this.logger.error({ error, positionId }, 'Failed to execute sell');
    await connection.getAccountInfo(pubkey, 'confirmed');
    ```
 
+4. **RPC Provider Manager** for rate-limited, load-balanced calls:
+   ```typescript
+   // Get account info with automatic provider selection and caching
+   const accountInfo = await rpcManager.getAccountInfo(pubkey);
+
+   // Send transaction with failover
+   const sig = await rpcManager.sendTransaction(tx, sendOptions);
+
+   // Check provider health
+   const health = rpcManager.getProviderHealth();
+   const stats = rpcManager.getProviderStats();
+   ```
+
 ### Configuration & Validation
 
 1. **Use Zod schemas for env validation**:
@@ -287,3 +300,5 @@ src/
 - `lamportsToSol()`, `solToLamports()` - Conversions: `src/utils/helpers.ts`
 - `createLogger()` - Pino logger factory: `src/utils/logger.ts`
 - `getSolBalance()`, `getAta()` - Wallet utils: `src/utils/wallet.ts`
+- `RpcProviderManager` - Multi-provider RPC with load balancing: `src/utils/rpc-provider.ts`
+- `RateLimiter`, `TTLCache` - Rate limiting and caching: `src/utils/rpc.ts`

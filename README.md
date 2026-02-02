@@ -14,6 +14,8 @@ A high-performance Solana token sniper bot built with TypeScript. Features gRPC 
   - **Token-2022 extension detection** (MintCloseAuthority, PermanentDelegate, TransferHook, etc.)
   - Risk scoring (0-100)
 - **MEV Protection**: Jito bundle submission with dynamic tip management
+- **Multi-Provider RPC**: Load balancing across Helius, Shyft, and Solana with automatic failover
+- **Rate Limiting & Caching**: Per-provider rate limits and response caching to avoid 429 errors
 - **Position Management**: Automated take-profit and stop-loss execution
 - **Auto-Sweep**: Automatic profit protection by transferring excess SOL to cold wallet
 - **Configurable**: Extensive configuration via environment variables
@@ -118,6 +120,14 @@ ENABLE_PUMPFUN=true
 DRY_RUN=false               # Set true to test without trading
 USE_DEVNET=false            # Set true for devnet testing
 
+# Multi-Provider RPC (load balancing)
+SHYFT_RPC_RPS=5             # Shyft rate limit (req/sec)
+HELIUS_RPC_RPS=3            # Helius rate limit (req/sec)
+HELIUS_PRIORITY=1           # Provider priority (1=highest)
+SHYFT_PRIORITY=1            # Same priority = load balanced
+SOLANA_PRIORITY=3           # Public RPC as backup
+RPC_CACHE_TTL_MS=2000       # Response cache TTL
+
 # Auto-Sweep (optional)
 ENABLE_AUTO_SWEEP=false     # Enable automatic profit sweeping
 # COLD_WALLET_ADDRESS=...   # Your cold wallet address (when enabled)
@@ -203,7 +213,9 @@ src/
 │   ├── logger.ts          # Pino structured logging
 │   ├── wallet.ts          # Keypair utilities
 │   ├── retry.ts           # Retry with backoff
-│   └── helpers.ts         # Common helpers
+│   ├── helpers.ts         # Common helpers
+│   ├── rpc-provider.ts    # Multi-provider RPC manager
+│   └── rpc.ts             # Rate limiter & TTL cache
 │
 └── index.ts               # Main entry point
 ```
@@ -306,6 +318,45 @@ npm run dev
 - Only the public key is needed (never share private keys)
 - Transactions are confirmed before marking success
 - Graceful failure - bot continues trading even if sweep fails
+
+## Multi-Provider RPC
+
+The bot uses multiple RPC providers with intelligent load balancing to maximize reliability and avoid rate limits.
+
+### Features
+
+- **Per-Provider Rate Limiting**: Each provider has independent rate limits to avoid 429 errors
+- **Priority-Based Selection**: Providers are selected by priority (1=highest, 2=medium, 3=backup)
+- **Load Balancing**: Providers with the same priority are used in round-robin fashion
+- **Automatic Failover**: Unhealthy providers are temporarily excluded, with automatic recovery
+- **Response Caching**: Account info is cached to reduce redundant RPC calls
+- **Health Tracking**: Consecutive failures trigger cooldown before retry
+
+### Configuration
+
+```env
+# Per-provider rate limits (requests per second)
+# Free tier actual limits: Helius ~3 RPS, Shyft ~5 RPS
+SHYFT_RPC_RPS=5
+HELIUS_RPC_RPS=3
+
+# Provider priorities (1=highest, 2=medium, 3=backup)
+# Same priority = round-robin load balancing
+HELIUS_PRIORITY=1
+SHYFT_PRIORITY=1
+SOLANA_PRIORITY=3
+
+# Cache TTL (higher = fewer calls, staler data)
+RPC_CACHE_TTL_MS=2000
+
+# Concurrency controls
+MAX_CONCURRENT_FETCHES=2    # Lower = fewer 429 errors
+FETCH_TIMEOUT_MS=5000       # Request timeout
+```
+
+### Provider Health
+
+Providers are marked unhealthy after 3 consecutive failures and enter a 30-second cooldown. During cooldown, the bot uses the next available provider by priority. After cooldown, the provider is retried automatically.
 
 ## Supported DEXes
 
