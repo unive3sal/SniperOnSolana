@@ -9,6 +9,7 @@ import {
 import type { Logger } from 'pino';
 import type { Config, SwapResult, DexType, BundleResult } from '../config/types.js';
 import { COMPUTE_BUDGET } from '../config/constants.js';
+import { RpcProviderManager } from '../utils/rpc-provider.js';
 import { JitoClient, buildVersionedTransaction } from './jito/client.js';
 import { TipManager } from './jito/tip.js';
 import { buildPumpfunBuyInstruction, buildPumpfunSellInstruction, getPumpfunPrice } from './builder/pumpfun.js';
@@ -39,20 +40,39 @@ export interface SwapRequest {
 export class ExecutorModule {
   private readonly config: Config;
   private readonly logger: Logger;
+  private readonly rpcProviderManager: RpcProviderManager | null;
   private readonly connection: Connection;
   private readonly jitoClient: JitoClient;
   private readonly tipManager: TipManager;
 
-  constructor(config: Config, logger: Logger) {
+  constructor(config: Config, logger: Logger, rpcProviderManager?: RpcProviderManager) {
     this.config = config;
     this.logger = logger.child({ module: 'executor' });
-    
-    this.connection = new Connection(config.network.heliusRpcUrl, {
-      commitment: 'confirmed',
-    });
+    this.rpcProviderManager = rpcProviderManager ?? null;
+
+    // Use RpcProviderManager if available, otherwise fall back to direct connection
+    if (rpcProviderManager) {
+      this.connection = rpcProviderManager.getConnection();
+      this.logger.info('ExecutorModule using RpcProviderManager');
+    } else {
+      this.connection = new Connection(config.network.heliusRpcUrl, {
+        commitment: 'confirmed',
+      });
+      this.logger.info('ExecutorModule using direct Helius connection');
+    }
 
     this.jitoClient = new JitoClient(config.jito.blockEngineUrl, this.logger);
     this.tipManager = new TipManager(config.jito, this.logger);
+  }
+
+  /**
+   * Get the best available connection (uses RpcProviderManager for failover if available)
+   */
+  private getBestConnection(): Connection {
+    if (this.rpcProviderManager) {
+      return this.rpcProviderManager.getConnection();
+    }
+    return this.connection;
   }
 
   /**
@@ -60,6 +80,7 @@ export class ExecutorModule {
    */
   async executeSwap(request: SwapRequest): Promise<SwapResult> {
     const startTime = Date.now();
+    const timings: Record<string, number> = {};
 
     this.logger.info({
       dex: request.dex,
@@ -67,7 +88,7 @@ export class ExecutorModule {
       type: request.type,
       solAmount: request.solAmount,
       tokenAmount: request.tokenAmount?.toString(),
-    }, 'Executing swap');
+    }, 'perf:executeSwap starting');
 
     // Dry run check
     if (this.config.mode.dryRun) {
@@ -80,8 +101,10 @@ export class ExecutorModule {
 
     try {
       // Build swap instructions
+      const buildInstructionsStart = Date.now();
       const instructions = await this.buildSwapInstructions(request);
-      
+      timings.buildInstructionsMs = Date.now() - buildInstructionsStart;
+
       if (instructions.length === 0) {
         throw new Error('No instructions built');
       }
@@ -93,7 +116,7 @@ export class ExecutorModule {
 
       // Calculate tip
       const tipCalc = this.tipManager.calculateTip('dynamic', {
-        expectedProfitLamports: request.solAmount 
+        expectedProfitLamports: request.solAmount
           ? request.solAmount * LAMPORTS_PER_SOL * 0.1 // Assume 10% profit
           : 0,
       });
@@ -112,23 +135,33 @@ export class ExecutorModule {
       ];
 
       // Build versioned transaction
+      const buildTxStart = Date.now();
       const tx = await buildVersionedTransaction(
         this.connection,
         this.config.wallet.publicKey,
         allInstructions,
         [this.config.wallet.keypair]
       );
+      timings.buildTxMs = Date.now() - buildTxStart;
 
       // Submit via Jito
+      const jitoSubmitStart = Date.now();
       const bundleResult = await this.jitoClient.sendBundle([tx], this.connection);
+      timings.jitoSubmitMs = Date.now() - jitoSubmitStart;
 
       // Record tip for statistics
       this.tipManager.recordTip(tipCalc.tipLamports, bundleResult.landed);
 
       if (!bundleResult.success) {
         // Try fallback to direct RPC
-        this.logger.warn('Jito bundle failed, trying direct RPC fallback');
-        return this.executeFallback(allInstructions, startTime);
+        this.logger.warn(
+          {
+            ...timings,
+            totalLatencyMs: Date.now() - startTime,
+          },
+          'perf:executeSwap Jito bundle failed, trying direct RPC fallback'
+        );
+        return this.executeFallbackWithTimings(allInstructions, startTime, timings);
       }
 
       const latencyMs = Date.now() - startTime;
@@ -137,18 +170,24 @@ export class ExecutorModule {
       let price: number | undefined;
       try {
         if (request.dex === 'pumpfun') {
+          const priceStart = Date.now();
           price = await getPumpfunPrice(this.connection, request.pool);
+          timings.priceFetchMs = Date.now() - priceStart;
         }
       } catch {
         // Price fetch optional
       }
 
       this.logger.info({
+        dex: request.dex,
+        type: request.type,
         bundleId: bundleResult.bundleId,
         slot: bundleResult.slot,
-        latencyMs,
         tipLamports: tipCalc.tipLamports,
-      }, 'Swap executed successfully via Jito');
+        instructionCount: allInstructions.length,
+        ...timings,
+        totalLatencyMs: latencyMs,
+      }, 'perf:executeSwap success via Jito');
 
       return {
         success: true,
@@ -158,7 +197,11 @@ export class ExecutorModule {
       };
     } catch (error) {
       const latencyMs = Date.now() - startTime;
-      this.logger.error({ error, latencyMs }, 'Swap execution failed');
+      this.logger.error({
+        error,
+        ...timings,
+        totalLatencyMs: latencyMs,
+      }, 'perf:executeSwap failed');
 
       return {
         success: false,
@@ -226,47 +269,72 @@ export class ExecutorModule {
   }
 
   /**
-   * Fallback to direct RPC submission
+   * Fallback to direct RPC submission with provider failover
    */
-  private async executeFallback(
+  private async executeFallbackWithTimings(
     instructions: TransactionInstruction[],
-    startTime: number
+    startTime: number,
+    priorTimings: Record<string, number> = {}
   ): Promise<SwapResult> {
+    const fallbackStart = Date.now();
+    const timings: Record<string, number> = { ...priorTimings };
+
     try {
       // Remove tip instruction for direct submission
       const instructionsNoTip = instructions.slice(0, -1);
+      const connection = this.getBestConnection();
 
+      const buildTxStart = Date.now();
       const tx = await buildVersionedTransaction(
-        this.connection,
+        connection,
         this.config.wallet.publicKey,
         instructionsNoTip,
         [this.config.wallet.keypair]
       );
+      timings.fallbackBuildTxMs = Date.now() - buildTxStart;
 
-      const signature = await retry(
-        async () => {
-          return this.connection.sendTransaction(tx, {
-            skipPreflight: true,
-            maxRetries: 3,
-          });
-        },
-        { maxAttempts: 3, baseDelayMs: 1000 },
-        this.logger
-      );
+      // Use RpcProviderManager for failover if available
+      let signature: string;
+      const sendStart = Date.now();
+      if (this.rpcProviderManager) {
+        signature = await this.rpcProviderManager.sendTransaction(tx, {
+          skipPreflight: true,
+          maxRetries: 3,
+        });
+      } else {
+        signature = await retry(
+          async () => {
+            return connection.sendTransaction(tx, {
+              skipPreflight: true,
+              maxRetries: 3,
+            });
+          },
+          { maxAttempts: 3, baseDelayMs: 1000 },
+          this.logger
+        );
+      }
+      timings.fallbackSendMs = Date.now() - sendStart;
 
       // Wait for confirmation
-      const confirmation = await this.connection.confirmTransaction(
+      const confirmStart = Date.now();
+      const confirmation = await connection.confirmTransaction(
         signature,
         'confirmed'
       );
+      timings.fallbackConfirmMs = Date.now() - confirmStart;
 
       if (confirmation.value.err) {
         throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
       }
 
       const latencyMs = Date.now() - startTime;
+      timings.fallbackTotalMs = Date.now() - fallbackStart;
 
-      this.logger.info({ signature, latencyMs }, 'Swap executed via direct RPC fallback');
+      this.logger.info({
+        signature,
+        ...timings,
+        totalLatencyMs: latencyMs,
+      }, 'perf:executeFallback success via direct RPC');
 
       return {
         success: true,
@@ -275,7 +343,13 @@ export class ExecutorModule {
       };
     } catch (error) {
       const latencyMs = Date.now() - startTime;
-      this.logger.error({ error, latencyMs }, 'Fallback execution failed');
+      timings.fallbackTotalMs = Date.now() - fallbackStart;
+
+      this.logger.error({
+        error,
+        ...timings,
+        totalLatencyMs: latencyMs,
+      }, 'perf:executeFallback failed');
 
       return {
         success: false,

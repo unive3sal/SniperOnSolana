@@ -10,10 +10,32 @@ export interface NetworkConfig {
   heliusRpcUrl: string;
   heliusWsUrl: string;
   backupRpcUrls: string[];
-  /** RPC rate limit in requests per second (default: 8 for Helius free plan) */
-  rpcRateLimitRps: number;
   /** RPC cache TTL in milliseconds (default: 2000) */
   rpcCacheTtlMs: number;
+
+  // Multi-provider RPC configuration
+  /** Shyft API key (defaults to grpcToken if not set) */
+  shyftApiKey: string;
+  /** Shyft RPC URL */
+  shyftRpcUrl: string;
+  /** Shyft RPC rate limit in requests per second */
+  shyftRpcRps: number;
+  /** Helius RPC rate limit in requests per second */
+  heliusRpcRps: number;
+  /** Solana native RPC URL (fallback) */
+  solanaRpcUrl: string;
+  /** RPC polling interval in milliseconds (when streaming fails) */
+  rpcPollingIntervalMs: number;
+  /** Enable gRPC auto-detection (false = always use WebSocket) */
+  enableGrpcAutoDetect: boolean;
+  /** Provider priorities (1=highest, 2=medium, 3=lowest) */
+  heliusPriority: 1 | 2 | 3;
+  shyftPriority: 1 | 2 | 3;
+  solanaPriority: 1 | 2 | 3;
+  /** Max concurrent transaction fetches (lower = fewer 429 errors) */
+  maxConcurrentFetches: number;
+  /** Fetch timeout in milliseconds */
+  fetchTimeoutMs: number;
 }
 
 /**

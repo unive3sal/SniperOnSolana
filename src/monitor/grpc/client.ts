@@ -45,6 +45,84 @@ export class GrpcClient extends EventEmitter {
   }
 
   /**
+   * Probe gRPC capability to detect if the endpoint is available
+   * Used for auto-detection of gRPC availability (free plans may not support gRPC)
+   *
+   * @param timeoutMs - Timeout in milliseconds (default: 5000)
+   * @returns Object with availability status and optional error message
+   */
+  async probeCapability(timeoutMs = 5000): Promise<{ available: boolean; error?: string }> {
+    this.logger.info({ endpoint: this.config.grpcEndpoint, timeoutMs }, 'Probing gRPC capability');
+
+    try {
+      // Create a new client instance for probing
+      const probeClient = new Client(
+        this.config.grpcEndpoint,
+        this.config.grpcToken,
+        undefined
+      );
+
+      // Create a timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('gRPC probe timeout')), timeoutMs);
+      });
+
+      // Race connection against timeout
+      await Promise.race([
+        probeClient.connect(),
+        timeoutPromise,
+      ]);
+
+      this.logger.info('gRPC probe successful - gRPC is available');
+      return { available: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      // Classify error types
+      if (
+        errorMessage.includes('UNAUTHENTICATED') ||
+        errorMessage.includes('403') ||
+        errorMessage.includes('authentication') ||
+        errorMessage.includes('permission denied')
+      ) {
+        // Auth errors indicate gRPC is not available for this plan
+        this.logger.info(
+          { error: errorMessage },
+          'gRPC unavailable - authentication error (likely free plan without gRPC access)'
+        );
+        return {
+          available: false,
+          error: 'gRPC not available: authentication failed (free plan may not include gRPC)',
+        };
+      }
+
+      if (
+        errorMessage.includes('UNAVAILABLE') ||
+        errorMessage.includes('timeout') ||
+        errorMessage.includes('ECONNREFUSED') ||
+        errorMessage.includes('ENOTFOUND')
+      ) {
+        // Network errors - may be temporary
+        this.logger.warn(
+          { error: errorMessage },
+          'gRPC unavailable - network error (may retry)'
+        );
+        return {
+          available: false,
+          error: `gRPC network error: ${errorMessage}`,
+        };
+      }
+
+      // Other errors
+      this.logger.warn({ error: errorMessage }, 'gRPC probe failed with unknown error');
+      return {
+        available: false,
+        error: `gRPC probe failed: ${errorMessage}`,
+      };
+    }
+  }
+
+  /**
    * Connect to gRPC endpoint
    */
   async connect(): Promise<void> {

@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 import type { Logger } from 'pino';
 import type { Config, Position, DexType, SwapResult } from '../config/types.js';
 import { TIMING } from '../config/constants.js';
+import { RpcProviderManager } from '../utils/rpc-provider.js';
 import { generateId } from '../utils/helpers.js';
 import { getAta, getTokenBalance } from '../utils/wallet.js';
 import { parsePumpfunBondingCurveState } from '../monitor/parsers/pumpfun.js';
@@ -15,19 +16,38 @@ import { getCachedMultipleAccountsInfo } from '../utils/rpc.js';
 export class PositionManager extends EventEmitter {
   private readonly config: Config;
   private readonly logger: Logger;
+  private readonly rpcProviderManager: RpcProviderManager | null;
   private readonly connection: Connection;
   private positions: Map<string, Position> = new Map();
   private priceMonitorInterval: NodeJS.Timeout | null = null;
   private isRunning = false;
 
-  constructor(config: Config, logger: Logger) {
+  constructor(config: Config, logger: Logger, rpcProviderManager?: RpcProviderManager) {
     super();
     this.config = config;
     this.logger = logger.child({ module: 'position' });
-    
-    this.connection = new Connection(config.network.heliusRpcUrl, {
-      commitment: 'confirmed',
-    });
+    this.rpcProviderManager = rpcProviderManager ?? null;
+
+    // Use RpcProviderManager if available, otherwise fall back to direct connection
+    if (rpcProviderManager) {
+      this.connection = rpcProviderManager.getConnection();
+      this.logger.info('PositionManager using RpcProviderManager');
+    } else {
+      this.connection = new Connection(config.network.heliusRpcUrl, {
+        commitment: 'confirmed',
+      });
+      this.logger.info('PositionManager using direct Helius connection');
+    }
+  }
+
+  /**
+   * Get the best available connection (uses RpcProviderManager for failover if available)
+   */
+  private getBestConnection(): Connection {
+    if (this.rpcProviderManager) {
+      return this.rpcProviderManager.getConnection();
+    }
+    return this.connection;
   }
 
   /**
@@ -210,7 +230,10 @@ export class PositionManager extends EventEmitter {
     if (pumpfunPositions.length > 0) {
       try {
         const bondingCurves = pumpfunPositions.map(p => p.pool);
-        const accounts = await getCachedMultipleAccountsInfo(this.connection, bondingCurves);
+        // Use RpcProviderManager for batch fetching if available
+        const accounts = this.rpcProviderManager
+          ? await this.rpcProviderManager.getMultipleAccountsInfo(bondingCurves)
+          : await getCachedMultipleAccountsInfo(this.connection, bondingCurves);
 
         for (let i = 0; i < pumpfunPositions.length; i++) {
           const position = pumpfunPositions[i];

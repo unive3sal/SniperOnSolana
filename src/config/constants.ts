@@ -84,15 +84,17 @@ export const RPC_ENDPOINTS = {
   // Mainnet
   MAINNET: {
     SOLANA: 'https://api.mainnet-beta.solana.com',
+    SOLANA_WS: 'wss://api.mainnet-beta.solana.com',
     HELIUS: (apiKey: string) => `https://mainnet.helius-rpc.com/?api-key=${apiKey}`,
     HELIUS_WS: (apiKey: string) => `wss://mainnet.helius-rpc.com/?api-key=${apiKey}`,
     SHYFT_RPC: (apiKey: string) => `https://rpc.shyft.to?api_key=${apiKey}`,
     SHYFT_GRPC: 'grpc.shyft.to:443',
   },
-  
+
   // Devnet
   DEVNET: {
     SOLANA: 'https://api.devnet.solana.com',
+    SOLANA_WS: 'wss://api.devnet.solana.com',
     HELIUS: (apiKey: string) => `https://devnet.helius-rpc.com/?api-key=${apiKey}`,
     HELIUS_WS: (apiKey: string) => `wss://devnet.helius-rpc.com/?api-key=${apiKey}`,
   },

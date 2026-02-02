@@ -52,10 +52,15 @@ export class WebSocketClient extends EventEmitter {
     this.emit('status', this.status);
 
     try {
-      this.logger.info({ wsUrl: this.config.heliusWsUrl }, 'Connecting to WebSocket');
+      // Use Solana public WebSocket to avoid consuming Helius/Shyft rate limits
+      // WebSocket subscriptions don't need API keys - just the public endpoint
+      const wsEndpoint = 'wss://api.mainnet-beta.solana.com';
+      const rpcEndpoint = this.config.solanaRpcUrl || 'https://api.mainnet-beta.solana.com';
 
-      this.connection = new Connection(this.config.heliusRpcUrl, {
-        wsEndpoint: this.config.heliusWsUrl,
+      this.logger.info({ wsUrl: wsEndpoint, rpcUrl: rpcEndpoint }, 'Connecting to WebSocket');
+
+      this.connection = new Connection(rpcEndpoint, {
+        wsEndpoint: wsEndpoint,
         commitment: 'confirmed',
       });
 

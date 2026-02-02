@@ -11,15 +11,47 @@ export const envSchema = z.object({
   GRPC_TOKEN: z.string().min(1, 'gRPC token is required'),
   HELIUS_API_KEY: z.string().min(1, 'Helius API key is required'),
   BACKUP_RPC_URLS: z.string().optional().default(''),
-  // RPC rate limit: Free=10, Developer=50, Business=100+
-  RPC_RATE_LIMIT_RPS: z.string().transform(Number).pipe(
-    z.number().int().positive().max(1000)
-  ).optional().default('8'),
   // RPC cache TTL in milliseconds (higher = fewer requests, but staler data)
   RPC_CACHE_TTL_MS: z.string().transform(Number).pipe(
     z.number().int().nonnegative().max(60000)
   ).optional().default('2000'),
-  
+
+  // Multi-provider RPC configuration
+  // Shyft API key (optional - defaults to GRPC_TOKEN)
+  SHYFT_API_KEY: z.string().optional(),
+  // Per-provider rate limits (free plan: ~10 RPS each)
+  SHYFT_RPC_RPS: z.string().transform(Number).pipe(
+    z.number().int().positive().max(1000)
+  ).optional().default('10'),
+  HELIUS_RPC_RPS: z.string().transform(Number).pipe(
+    z.number().int().positive().max(1000)
+  ).optional().default('10'),
+  // Provider priority (1=highest, 2=medium, 3=lowest/backup)
+  // Lower priority providers are used when higher priority ones are overloaded
+  HELIUS_PRIORITY: z.string().transform(Number).pipe(
+    z.number().int().min(1).max(3)
+  ).optional().default('1'),
+  SHYFT_PRIORITY: z.string().transform(Number).pipe(
+    z.number().int().min(1).max(3)
+  ).optional().default('2'),
+  SOLANA_PRIORITY: z.string().transform(Number).pipe(
+    z.number().int().min(1).max(3)
+  ).optional().default('3'),
+  // RPC polling interval when streaming unavailable (ms)
+  RPC_POLLING_INTERVAL_MS: z.string().transform(Number).pipe(
+    z.number().int().positive().max(60000)
+  ).optional().default('2000'),
+  // Auto-detect gRPC capability (set false to always use WebSocket)
+  ENABLE_GRPC_AUTO_DETECT: z.string().transform((v) => v === 'true').optional().default('true'),
+  // Max concurrent transaction fetches (lower = fewer 429 errors, but slower detection)
+  MAX_CONCURRENT_FETCHES: z.string().transform(Number).pipe(
+    z.number().int().positive().max(20)
+  ).optional().default('2'),
+  // Fetch timeout in milliseconds (should be > rate limit wait time)
+  FETCH_TIMEOUT_MS: z.string().transform(Number).pipe(
+    z.number().int().positive().max(30000)
+  ).optional().default('5000'),
+
   // Wallet
   PRIVATE_KEY: z.string().min(1, 'Private key is required').refine(
     (key) => {

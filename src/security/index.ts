@@ -3,6 +3,7 @@ import { LRUCache } from 'lru-cache';
 import type { Logger } from 'pino';
 import type { Config, RiskAnalysis, RiskFactor, DexType, Token2022ExtensionInfo } from '../config/types.js';
 import { TIMING } from '../config/constants.js';
+import { RpcProviderManager } from '../utils/rpc-provider.js';
 import { checkAuthorities } from './checks/authority.js';
 import { checkPoolLiquidity, checkLpLock, checkLpBurn } from './checks/liquidity.js';
 import { analyzeHolders, checkDevWallet } from './checks/holders.js';
@@ -42,18 +43,27 @@ export interface AnalysisRequest {
 export class SecurityModule {
   private readonly config: Config;
   private readonly logger: Logger;
+  private readonly rpcProviderManager: RpcProviderManager | null;
   private readonly connection: Connection;
   private readonly cache: LRUCache<string, RiskAnalysis>;
   private readonly blacklist: BlacklistManager;
   private readonly whitelist: WhitelistManager;
 
-  constructor(config: Config, logger: Logger) {
+  constructor(config: Config, logger: Logger, rpcProviderManager?: RpcProviderManager) {
     this.config = config;
     this.logger = logger.child({ module: 'security' });
-    
-    this.connection = new Connection(config.network.heliusRpcUrl, {
-      commitment: 'confirmed',
-    });
+    this.rpcProviderManager = rpcProviderManager ?? null;
+
+    // Use RpcProviderManager if available, otherwise fall back to direct connection
+    if (rpcProviderManager) {
+      this.connection = rpcProviderManager.getConnection();
+      this.logger.info('SecurityModule using RpcProviderManager');
+    } else {
+      this.connection = new Connection(config.network.heliusRpcUrl, {
+        commitment: 'confirmed',
+      });
+      this.logger.info('SecurityModule using direct Helius connection');
+    }
 
     this.cache = new LRUCache<string, RiskAnalysis>({
       max: 1000,
@@ -62,6 +72,16 @@ export class SecurityModule {
 
     this.blacklist = new BlacklistManager(this.logger);
     this.whitelist = new WhitelistManager(this.logger);
+  }
+
+  /**
+   * Get the best available connection (uses RpcProviderManager for failover if available)
+   */
+  private getBestConnection(): Connection {
+    if (this.rpcProviderManager) {
+      return this.rpcProviderManager.getConnection();
+    }
+    return this.connection;
   }
 
   /**
@@ -115,31 +135,45 @@ export class SecurityModule {
       return analysis;
     }
 
-    this.logger.info({ mint: cacheKey, dex: request.dex }, 'Starting security analysis');
+    this.logger.info({ mint: cacheKey, dex: request.dex }, 'perf:analyze starting security analysis');
     const startTime = Date.now();
+    const timings: Record<string, number> = {};
 
     try {
       // Phase 1: Fast checks (run in parallel)
+      const fastChecksStart = Date.now();
       const fastFactors = await this.runFastChecks(request);
-      
+      timings.fastChecksMs = Date.now() - fastChecksStart;
+
       // Check if we should proceed to deep analysis
       if (!shouldProceedToDeepAnalysis(fastFactors)) {
         const analysis = calculateRiskScore(fastFactors);
         this.cache.set(cacheKey, analysis);
         this.logger.info(
-          { mint: cacheKey, score: analysis.score, passed: false, phase: 'fast' },
-          'Analysis failed fast checks'
+          {
+            mint: cacheKey,
+            score: analysis.score,
+            passed: false,
+            phase: 'fast',
+            ...timings,
+            totalLatencyMs: Date.now() - startTime,
+          },
+          'perf:analyze failed fast checks'
         );
         return analysis;
       }
 
       // Phase 2: Deep checks (run in parallel where possible)
+      const deepChecksStart = Date.now();
       const deepFactors = await this.runDeepChecks(request);
+      timings.deepChecksMs = Date.now() - deepChecksStart;
 
       // Phase 3: Honeypot check (if enabled)
       let honeypotFactor: RiskFactor | null = null;
       if (this.config.security.enableHoneypotCheck) {
+        const honeypotStart = Date.now();
         honeypotFactor = await this.runHoneypotCheck(request);
+        timings.honeypotCheckMs = Date.now() - honeypotStart;
       }
 
       // Combine all factors
@@ -150,25 +184,35 @@ export class SecurityModule {
       ];
 
       const analysis = calculateRiskScore(allFactors);
-      
+
       // Cache result
       this.cache.set(cacheKey, analysis);
 
-      const duration = Date.now() - startTime;
+      const totalLatencyMs = Date.now() - startTime;
       this.logger.info(
         {
           mint: cacheKey,
+          dex: request.dex,
           score: analysis.score,
           passed: analysis.passed,
           level: getRiskLevel(analysis.score),
-          duration,
+          factorCount: allFactors.length,
+          warningCount: analysis.warnings.length,
+          ...timings,
+          totalLatencyMs,
         },
-        'Security analysis completed'
+        'perf:analyze completed'
       );
 
       return analysis;
     } catch (error) {
-      this.logger.error({ error, mint: cacheKey }, 'Security analysis failed');
+      const totalLatencyMs = Date.now() - startTime;
+      this.logger.error({
+        error,
+        mint: cacheKey,
+        ...timings,
+        totalLatencyMs,
+      }, 'perf:analyze failed');
       
       // Return a failed analysis on error
       const analysis: RiskAnalysis = {
@@ -281,18 +325,30 @@ export class SecurityModule {
    * Quick check for minimum viability (for ultra-fast decisions)
    */
   async quickCheck(request: AnalysisRequest): Promise<{ viable: boolean; reason?: string }> {
+    const startTime = Date.now();
+    const mint = request.mint.toBase58();
+
     // Check blacklist first
     const blacklisted = this.blacklist.isBlacklisted(request.mint);
     if (blacklisted) {
+      this.logger.debug(
+        { mint, latencyMs: Date.now() - startTime, result: 'blacklisted' },
+        'perf:quickCheck blacklisted'
+      );
       return { viable: false, reason: `Blacklisted: ${blacklisted.reason}` };
     }
 
     // Check whitelist
     if (this.whitelist.isWhitelisted(request.mint)) {
+      this.logger.debug(
+        { mint, latencyMs: Date.now() - startTime, result: 'whitelisted' },
+        'perf:quickCheck whitelisted'
+      );
       return { viable: true };
     }
 
     // Check liquidity and Token-2022 critical extensions in parallel
+    const checksStart = Date.now();
     const [liquidity, criticalExtensions] = await Promise.all([
       checkPoolLiquidity(
         this.connection,
@@ -303,19 +359,47 @@ export class SecurityModule {
       ),
       hasCriticalExtensions(this.connection, request.mint, this.logger),
     ]);
+    const checksLatencyMs = Date.now() - checksStart;
 
     // Check for critical Token-2022 extensions first (instant fail)
     if (criticalExtensions.hasCritical) {
-      return { 
-        viable: false, 
+      this.logger.debug(
+        {
+          mint,
+          checksLatencyMs,
+          totalLatencyMs: Date.now() - startTime,
+          result: 'critical_extensions',
+        },
+        'perf:quickCheck critical extensions detected'
+      );
+      return {
+        viable: false,
         reason: `Critical Token-2022 extensions: ${criticalExtensions.reasons.join(', ')}`,
       };
     }
 
     if (!liquidity.passed) {
+      this.logger.debug(
+        {
+          mint,
+          checksLatencyMs,
+          totalLatencyMs: Date.now() - startTime,
+          result: 'insufficient_liquidity',
+        },
+        'perf:quickCheck insufficient liquidity'
+      );
       return { viable: false, reason: liquidity.details };
     }
 
+    this.logger.debug(
+      {
+        mint,
+        checksLatencyMs,
+        totalLatencyMs: Date.now() - startTime,
+        result: 'viable',
+      },
+      'perf:quickCheck passed'
+    );
     return { viable: true };
   }
 

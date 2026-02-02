@@ -2,7 +2,7 @@ import { Connection, PublicKey, AccountInfo } from '@solana/web3.js';
 import type { Logger } from 'pino';
 
 /**
- * Simple token bucket rate limiter
+ * Simple token bucket rate limiter with burst control
  */
 export class RateLimiter {
   private tokens: number;
@@ -12,9 +12,11 @@ export class RateLimiter {
   private queue: Array<{ resolve: () => void; priority: number }> = [];
   private processing = false;
 
-  constructor(requestsPerSecond: number) {
-    this.maxTokens = requestsPerSecond;
-    this.tokens = requestsPerSecond;
+  constructor(requestsPerSecond: number, maxBurst?: number) {
+    // maxBurst limits how many tokens can accumulate (prevents burst at startup)
+    // Default to 2 tokens max burst to prevent overwhelming the API
+    this.maxTokens = maxBurst ?? Math.min(2, requestsPerSecond);
+    this.tokens = 1; // Start with only 1 token to prevent initial burst
     this.refillRate = requestsPerSecond;
     this.lastRefill = Date.now();
   }

@@ -29,11 +29,20 @@ export function loadConfig(): Config {
   const heliusRpcUrl = isDevnet
     ? RPC_ENDPOINTS.DEVNET.HELIUS(env.HELIUS_API_KEY)
     : RPC_ENDPOINTS.MAINNET.HELIUS(env.HELIUS_API_KEY);
-    
+
   const heliusWsUrl = isDevnet
     ? RPC_ENDPOINTS.DEVNET.HELIUS_WS(env.HELIUS_API_KEY)
     : RPC_ENDPOINTS.MAINNET.HELIUS_WS(env.HELIUS_API_KEY);
-  
+
+  // Shyft API key defaults to GRPC_TOKEN if not explicitly set
+  const shyftApiKey = env.SHYFT_API_KEY || env.GRPC_TOKEN;
+  const shyftRpcUrl = RPC_ENDPOINTS.MAINNET.SHYFT_RPC(shyftApiKey);
+
+  // Solana native RPC (backup fallback)
+  const solanaRpcUrl = isDevnet
+    ? RPC_ENDPOINTS.DEVNET.SOLANA
+    : RPC_ENDPOINTS.MAINNET.SOLANA;
+
   // Parse backup RPC URLs
   const backupRpcUrls = env.BACKUP_RPC_URLS
     ? env.BACKUP_RPC_URLS.split(',').map((url) => url.trim()).filter(Boolean)
@@ -47,8 +56,20 @@ export function loadConfig(): Config {
       heliusRpcUrl,
       heliusWsUrl,
       backupRpcUrls,
-      rpcRateLimitRps: env.RPC_RATE_LIMIT_RPS,
       rpcCacheTtlMs: env.RPC_CACHE_TTL_MS,
+      // Multi-provider RPC configuration
+      shyftApiKey,
+      shyftRpcUrl,
+      shyftRpcRps: env.SHYFT_RPC_RPS,
+      heliusRpcRps: env.HELIUS_RPC_RPS,
+      solanaRpcUrl,
+      rpcPollingIntervalMs: env.RPC_POLLING_INTERVAL_MS,
+      enableGrpcAutoDetect: env.ENABLE_GRPC_AUTO_DETECT,
+      heliusPriority: env.HELIUS_PRIORITY as 1 | 2 | 3,
+      shyftPriority: env.SHYFT_PRIORITY as 1 | 2 | 3,
+      solanaPriority: env.SOLANA_PRIORITY as 1 | 2 | 3,
+      maxConcurrentFetches: env.MAX_CONCURRENT_FETCHES,
+      fetchTimeoutMs: env.FETCH_TIMEOUT_MS,
     },
     
     wallet: {
@@ -170,9 +191,17 @@ export function getConfigSummary(config: Config): Record<string, unknown> {
     network: {
       grpcEndpoint: config.network.grpcEndpoint,
       heliusRpcUrl: config.network.heliusRpcUrl.replace(/api-key=[^&]+/, 'api-key=***'),
+      shyftRpcUrl: config.network.shyftRpcUrl.replace(/api_key=[^&]+/, 'api_key=***'),
+      solanaRpcUrl: config.network.solanaRpcUrl,
       backupRpcCount: config.network.backupRpcUrls.length,
-      rpcRateLimitRps: config.network.rpcRateLimitRps,
       rpcCacheTtlMs: config.network.rpcCacheTtlMs,
+      shyftRpcRps: config.network.shyftRpcRps,
+      heliusRpcRps: config.network.heliusRpcRps,
+      heliusPriority: config.network.heliusPriority,
+      shyftPriority: config.network.shyftPriority,
+      solanaPriority: config.network.solanaPriority,
+      rpcPollingIntervalMs: config.network.rpcPollingIntervalMs,
+      enableGrpcAutoDetect: config.network.enableGrpcAutoDetect,
     },
     wallet: {
       publicKey: config.wallet.publicKey.toBase58(),
