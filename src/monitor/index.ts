@@ -432,27 +432,51 @@ export class MonitorCoordinator extends EventEmitter {
 
   /**
    * Check if logs indicate a pool creation event (specific patterns per DEX)
+   *
+   * IMPORTANT: Previous implementation was too loose and matched on generic patterns
+   * like ATA's "Create" or Raydium's "ray_log" (used for swaps too).
+   *
+   * This version uses specific indicators that ONLY appear during pool/token creation:
+   * - Pumpfun: Metaplex metadata program is invoked (only during token creation)
+   * - Raydium: LP mint initialization (only during pool creation)
    */
   private isPoolCreationLog(dex: DexType, logs: string[]): boolean {
+    // Join logs for easier pattern matching across the full transaction
+    const logsJoined = logs.join(' ');
+
     switch (dex) {
       case 'pumpfun':
-        // Pumpfun pool creation has specific instruction pattern
-        // Look for "Program log: Instruction: Create" (not just "Create" anywhere)
-        return logs.some((log) =>
-          log.includes('Program log: Instruction: Create') ||
-          log.includes('Program log: Instruction: Initialize')
+        // Pumpfun token creation MUST involve:
+        // 1. Pumpfun program (6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P)
+        // 2. Metaplex Token Metadata program (metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s)
+        //
+        // Buy/sell transactions do NOT invoke the metadata program.
+        // The old pattern 'Program log: Instruction: Create' matched ATA's Create
+        // which happens in every buy/sell transaction.
+        return (
+          logsJoined.includes('6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke') &&
+          logsJoined.includes('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s')
         );
 
       case 'raydium':
-        // Raydium AMM initialization
-        return logs.some((log) =>
-          log.includes('Program log: initialize2') ||
-          log.includes('Program log: Initialize') ||
-          log.includes('ray_log') // Raydium specific log prefix
+        // Raydium pool initialization (initialize2) MUST:
+        // 1. Invoke Raydium AMM V4 program (675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8)
+        // 2. Create a new LP mint (InitializeMint instruction)
+        //
+        // Swap transactions do NOT create new mints - they only transfer tokens.
+        // The old pattern 'ray_log' matched ALL Raydium operations including swaps.
+        return (
+          logsJoined.includes('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8 invoke') &&
+          (
+            // Explicit initialize2 log
+            logsJoined.includes('Program log: initialize2') ||
+            // LP mint creation pattern - only happens during pool init
+            (logsJoined.includes('ray_log') && logsJoined.includes('Instruction: InitializeMint'))
+          )
         );
 
       case 'orca':
-        // Orca Whirlpool initialization
+        // Orca Whirlpool initialization - these patterns are specific enough
         return logs.some((log) =>
           log.includes('Program log: Instruction: InitializePool') ||
           log.includes('Program log: Instruction: InitializeConfig')
